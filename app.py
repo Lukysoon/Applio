@@ -36,7 +36,7 @@ from tabs.settings.precision import precision_tab
 # Run prerequisites
 from core import run_prerequisites_script
 
-run_prerequisites_script(False, True, True, True)
+run_prerequisites_script(False, False, True, True)
 
 # Initialize i18n
 from assets.i18n.i18n import I18nAuto
