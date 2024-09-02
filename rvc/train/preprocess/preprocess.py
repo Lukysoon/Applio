@@ -4,12 +4,12 @@ import time
 from scipy import signal
 from scipy.io import wavfile
 import numpy as np
-import multiprocessing
+import concurrent.futures
+from tqdm import tqdm
 import json
 from distutils.util import strtobool
 import librosa
-
-multiprocessing.set_start_method("spawn", force=True)
+import multiprocessing
 
 now_directory = os.getcwd()
 sys.path.append(now_directory)
@@ -20,7 +20,6 @@ from rvc.train.preprocess.slicer import Slicer
 # Remove colab logs
 import logging
 
-logging.getLogger("pydub").setLevel(logging.WARNING)
 logging.getLogger("numba.core.byteflow").setLevel(logging.WARNING)
 logging.getLogger("numba.core.ssa").setLevel(logging.WARNING)
 logging.getLogger("numba.core.interpreter").setLevel(logging.WARNING)
@@ -72,6 +71,7 @@ class PreProcess:
             self._normalize_audio(audio_segment) if process_effects else audio_segment
         )
         if normalized_audio is None:
+            print(f"{idx0}-{idx1}-filtered")
             return
         wavfile.write(
             os.path.join(self.gt_wavs_dir, f"{idx0}_{idx1}.wav"),
@@ -124,8 +124,8 @@ class PreProcess:
                             break
             else:
                 self.process_audio_segment(audio, idx0, idx1, process_effects)
-        except Exception as e:
-            print(f"Error processing audio: {e}")
+        except Exception as error:
+            print(f"Error processing audio: {error}")
         return audio_length
 
 
@@ -178,11 +178,16 @@ def preprocess_training_set(
         for idx, f in enumerate(os.listdir(input_root))
         if f.lower().endswith((".wav", ".mp3", ".flac", ".ogg"))
     ]
-    ctx = multiprocessing.get_context("spawn")
-    with ctx.Pool(processes=num_processes) as pool:
-        audio_length = pool.map(
-            process_audio_wrapper,
-            [(pp, file, cut_preprocess, process_effects) for file in files],
+    # print(f"Number of files: {len(files)}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_processes) as executor:
+        audio_length = list(
+            tqdm(
+                executor.map(
+                    process_audio_wrapper,
+                    [(pp, file, cut_preprocess, process_effects) for file in files],
+                ),
+                total=len(files),
+            )
         )
     audio_length = sum(audio_length)
     save_dataset_duration(
@@ -190,7 +195,7 @@ def preprocess_training_set(
     )
     elapsed_time = time.time() - start_time
     print(
-        f"Preprocess completed in {elapsed_time:.2f} seconds. Dataset duration: {format_duration(audio_length)}."
+        f"Preprocess completed in {elapsed_time:.2f} seconds on {format_duration(audio_length)} seconds of audio."
     )
 
 
