@@ -6,6 +6,9 @@ numpy==1.23.5
 requests==2.32.0
 tqdm
 wget
+pydantic==2.8.2
+fastapi==0.112.0
+starlette==0.37.2
 
 # Audio processing
 ffmpeg-python>=0.2.0
@@ -16,8 +19,9 @@ scipy==1.11.1
 soundfile==0.12.1
 praat-parselmouth
 noisereduce
-audio_upscaler==0.1.4
+versatile-audio-upscaler
 pedalboard
+stftpitchshift
 
 # Machine learning and deep learning
 omegaconf==2.0.5; sys_platform == 'darwin'
@@ -35,7 +39,7 @@ transformers==4.44.2
 # Visualization and UI
 matplotlib==3.7.2
 tensorboard
-gradio==4.36.0
+gradio==4.43.0
 
 # Miscellaneous utilities
 certifi==2024.7.4; sys_platform == 'darwin'
