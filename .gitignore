@@ -14,7 +14,7 @@
 *.png
 *.safetensors
 
-logs
+log/*
 env
 venv
 .venv
