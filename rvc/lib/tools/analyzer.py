@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import matplotlib.pyplot as plt
 import librosa.display
@@ -57,141 +58,146 @@ def plot_features(times, cent, bw, rolloff, duration):
     plt.title("Spectral Features")
     plt.legend()
 
-def plot_feature_distance_comparison(y1, y2, distances):
-    plt.subplot(1, 1, 1)
-
-    # for distance in distances:
-    number_of_points_in_plot_1 = np.linspace(0, round(len(y1)/16000, 3), distances[0].size)
-    plt.plot(number_of_points_in_plot_1, distances[0], label="Distances_1", color="b")
+def plot_feature_distance_comparison(raw_audios: list, audio_file_names: list, distance_points_per_audio_file: list, ):
+    colors = ['red', 'blue', 'green', 'purple', 'orange', 'brown', 'pink', 'gray']
     
-    if (len(distances) == 2):
-        number_of_points_in_plot_2 = np.linspace(0, round(len(y2)/16000, 3), distances[1].size)
-        plt.plot(number_of_points_in_plot_2, distances[1], label="Distances_2", color="r")
+    for idx, raw_audio in enumerate(raw_audios):
+        random_color = random.choice(colors)
+        colors.remove(random_color)
+        number_of_points_in_plot = np.linspace(0, round(len(raw_audio)/16000, 3), distance_points_per_audio_file[idx].size)
+        
+        distance_mean = round(np.mean(distance_points_per_audio_file[idx]), 1)
+        distance_std = round(np.std(distance_points_per_audio_file[idx]), 1)
     
+        plt.plot(number_of_points_in_plot, distance_points_per_audio_file[idx], label=audio_file_names[idx] + f" (mean: {distance_mean} | std: {distance_std})", color=random_color)
+    
+    plt.ylabel("Feature distance")
     plt.xlabel("Time (s)")
-    plt.title(f"Feature distance comparison")
+    plt.title(f"Feature distance comparison ")
     plt.legend()
 
-def plot_feature_distance(y1, y2, distances):
+def plot_feature_distance(y, distances_points, file_name):
     plt.subplot(3, 1, 3)
 
+    distance_mean = round(np.mean(distances_points), 1)
+    distance_std = round(np.std(distances_points), 1)
+
     # for distance in distances:
-    number_of_points_in_plot_1 = np.linspace(0, round(len(y1)/16000, 3), distances[0].size)
-    plt.plot(number_of_points_in_plot_1, distances[0], label="Distances_1", color="b")
+    number_of_points_in_plot_1 = np.linspace(0, round(len(y)/16000, 3), distances_points.size)
+    plt.plot(number_of_points_in_plot_1, distances_points, label=file_name, color="b")
     
-    if (len(distances) == 2):
-        number_of_points_in_plot_2 = np.linspace(0, round(len(y2)/16000, 3), distances[1].size)
-        plt.plot(number_of_points_in_plot_2, distances[1], label="Distances_2", color="r")
-    
+    plt.ylabel("Feature distance")
     plt.xlabel("Time (s)")
-    plt.title(f"Feature distance comparison")
+    plt.title(f"Feature distance (mean: {distance_mean} | std: {distance_std})")
     plt.legend()
 
-
-def analyze_audio(audio_file, index_input, save_plot_path="logs/audio_analysis.png"):
-    y, sr = librosa.load(audio_file, 16000)
+def analyze_audio(audio_file_path: str, index_path: str, save_plot_path: str):
+    y, sr = librosa.load(audio_file_path, 16000)
 
     stft, duration, cent, bw, rolloff = calculate_features(y, sr)
+    
+    distances_points = get_distance(audio_file_path, index_path)
+    
     plt.figure(figsize=(12, 10))
-    plot_title("Audio Analysis" + " - " + audio_file.split("/")[-1])
+
+    plot_title("Audio Analysis" + " - " + audio_file_path.split("/")[-1])
     plot_spectrogram(y, sr, stft, duration)
     plot_waveform(y, sr, duration)
-    # plot_features(librosa.times_like(cent, sr=16000), cent, bw, rolloff, duration)
-    distances_points = get_distances([audio_file], index_input)
-    plot_feature_distance(y, y, distances_points)
+    plot_feature_distance(y, distances_points, audio_file_path.split('/')[-1])
 
     plt.tight_layout()
 
-    if save_plot_path:
-        plt.savefig(save_plot_path, bbox_inches="tight", dpi=300)
+    plt.savefig(save_plot_path, bbox_inches="tight", dpi=300)
     plt.close()
 
     audio_info = f"""Sample Rate: {sr}\nDuration: {(
             str(round(duration, 2)) + " seconds"
             if duration < 60
             else str(round(duration / 60, 2)) + " minutes"
-    )}\nNumber of Samples: {len(y)}\nBits per Sample: {librosa.get_samplerate(audio_file)}\nChannels: {"Mono (1)" if y.ndim == 1 else "Stereo (2)"}"""
+    )}\nNumber of Samples: {len(y)}\nBits per Sample: {librosa.get_samplerate(audio_file_path)}\nChannels: {"Mono (1)" if y.ndim == 1 else "Stereo (2)"}"""
 
     return audio_info, save_plot_path
 
-def generate_comparison_plot(first_audio_file, second_audio_file, index_file, save_plot_path="logs/audio_comparison.png"):
-    first_y, first_sr = librosa.load(first_audio_file, 16000)
-    second_y, second_sr = librosa.load(second_audio_file, 16000)
+def generate_comparison_plot(audio_paths: list, index_path: str):
+    save_plot_path="logs/audio_comparison.png"
+    
+    raw_audios = []
+    for audio_file in audio_paths:
+        y, sr = librosa.load(audio_file, 16000) # Load an audio file as a floating point time series
+        raw_audios.append(y)
 
-    # pad shorter audio
+    # pad shorter audio (we don't need it probably)
     # if (first_y.size > second_y.size):
     #     second_y = np.concatenate([second_y, np.zeros(first_y.size - second_y.size)])
     # if (second_y.size > first_y.size):
     #     first_y = np.concatenate([first_y, np.zeros(second_y.size - first_y.size)])
 
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(12, 3))
 
-    plot_title("Audio Analysis" + " - " + first_audio_file.split("/")[-1] + " and " + second_audio_file.split("/")[-1])
-    distances_points = get_distances([first_audio_file, second_audio_file], index_file)
-    plot_feature_distance_comparison(first_y, second_y, distances_points)
+    plot_title("Audio Analysis")
+    audio_file_names = [audio_file.split('/')[-1] for audio_file in audio_paths]
+    distance_points_per_audio_file = [get_distance(audio_file, index_path) for audio_file in audio_paths]
+
+    plot_feature_distance_comparison(raw_audios, audio_file_names, distance_points_per_audio_file)
 
     plt.tight_layout()
 
-    if save_plot_path:
-        plt.savefig(save_plot_path, bbox_inches="tight", dpi=300)
+    plt.savefig(save_plot_path, bbox_inches="tight", dpi=300)
     plt.close()
 
     return save_plot_path
 
-def get_distances(audio_paths, index_file):
+def get_distance(audio_path: str, index_path: str):
     
     config = Config()
     model = load_hubert_model(config)
-    scores = []
-    for idx, audio_path in enumerate(audio_paths):
 
-        audio = load_audio(audio_path)
-        audio_chunks, intervals = process_audio(audio, 16000)
+    audio = load_audio(audio_path)
+    audio_chunks, intervals = process_audio(audio, 16000)
 
-        audio_intervals = {}
-        for audio_chunk, interval in zip(audio_chunks, intervals):
-            audio_intervals[tuple(interval)] = audio_chunk
-        
-        silence_intervals = get_silence_intervals(intervals, audio.size)
-        for interval in silence_intervals:
-            audio_intervals[tuple(interval)] = None
+    audio_intervals = {}
+    for audio_chunk, interval in zip(audio_chunks, intervals):
+        audio_intervals[tuple(interval)] = audio_chunk
+    
+    silence_intervals = get_silence_intervals(intervals, audio.size)
+    for interval in silence_intervals:
+        audio_intervals[tuple(interval)] = None
 
-        audio_intervals = collections.OrderedDict(sorted(audio_intervals.items()))
-        audio_points_per_feature = 320
+    audio_intervals = collections.OrderedDict(sorted(audio_intervals.items()))
+    audio_points_per_feature = 320 # 16000/50 | 16000 is a sample rate per 1 second | there are 50 of 20ms chunks in 1 seconds 
 
-        score = np.empty(0)
-        for interval, values in audio_intervals.items():
-            # print("interval, values", interval, values)
-            if values is not None:
-                chunk_feats = prepare_feats(values, config)
-                # extract features
-                model_output = model(chunk_feats)
-                out_feats = model_output["last_hidden_state"]
-                index = faiss.read_index(index_file)
-                npy = out_feats[0].cpu().detach().numpy()
-                npy = npy.astype("float32") if config.is_half else npy
-                chunk_score, ix = index.search(npy, k=8)
-                min_chunk_score = np.min(chunk_score, axis=1)
-                print("score", min_chunk_score)
+    score = np.empty(0)
+    for interval, values in audio_intervals.items():
+        if values is not None:
+            chunk_feats = prepare_feats(values, config)
+            # extract features
+            model_output = model(chunk_feats)
+            out_feats = model_output["last_hidden_state"]
+            index = faiss.read_index(index_path)
+            npy = out_feats[0].cpu().detach().numpy()
+            npy = npy.astype("float32") if config.is_half else npy
+            chunk_score, ix = index.search(npy, k=8)
+            
+            min_chunk_score = np.min(chunk_score, axis=1)
+            
+            score = np.concatenate([score, min_chunk_score])
 
-                kernel_value = 100
-                kernel = np.repeat(1, kernel_value)
-                padded_score = np.concatenate([np.zeros(len(kernel)//2), min_chunk_score, np.zeros(len(kernel)//2)])
-                score_moving_average = np.convolve(padded_score, kernel, "valid")
-                score_moving_average = score_moving_average[:-1] # Remove last element because valid add +1
-                score_moving_average = score_moving_average / kernel_value # Convolution is summing values without dividing them so we must divide it by number of kernel points
+            # # moving average
+            # kernel_value = 100
+            # kernel = np.repeat(1, kernel_value)
+            # padded_score = np.concatenate([np.zeros(len(kernel)//2), min_chunk_score, np.zeros(len(kernel)//2)])
+            # score_moving_average = np.convolve(padded_score, kernel, "valid")
+            # score_moving_average = score_moving_average[:-1] # Remove last element because valid add +1
+            # score_moving_average = score_moving_average / kernel_value # Convolution is summing values without dividing them so we must divide it by number of kernel points
+            # score = np.concatenate([score, score_moving_average])
 
-                print("score_moving_average", score_moving_average)
-                score = np.concatenate([score, score_moving_average])
-            else:
-                number_of_features = int((interval[1] - interval[0]) / audio_points_per_feature)
-                # print(f"{number_of_features} features for interval {interval}")
-                zeros = np.zeros(number_of_features)
-                score = np.concatenate([score, zeros])
+        else:
+            number_of_features = int((interval[1] - interval[0]) / audio_points_per_feature)
+            # print(f"{number_of_features} features for interval {interval}")
+            zeros = np.zeros(number_of_features)
+            score = np.concatenate([score, zeros])
 
-        scores.append(score)
-        # print("score.size", score.size)
-    return scores
+    return score
 
 def load_hubert_model(config):
     hubert_model = load_embedding("contentvec", None)

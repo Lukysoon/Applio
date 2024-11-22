@@ -6,16 +6,9 @@ rm *.bat
 # Function to create or activate a virtual environment
 prepare_install() {
     if [ -d ".venv" ]; then
-        echo "Venv found. This implies Applio has been already installed or this is a broken install"
-        printf "Do you want to execute run-applio.sh? (Y/N): " >&2
-        read -r r
-        r=$(echo "$r" | tr '[:upper:]' '[:lower:]')
-        if [ "$r" = "y" ]; then
-            chmod +x run-applio.sh  
-            ./run-applio.sh && exit 1
-        else
-            echo "Ok! The installation will continue. Good luck!"
-        fi
+        echo "Venv found. This implies Applio has been already installed or this is a broken install. Try run Applio."
+        chmod +x run-applio.sh
+        ./run-applio.sh && exit 1
         if [ -f ".venv/bin/activate" ]; then
             . .venv/bin/activate  
         else

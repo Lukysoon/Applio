@@ -5,6 +5,7 @@ import argparse
 import subprocess
 from functools import lru_cache
 from distutils.util import strtobool
+import gradio as gr
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -649,31 +650,47 @@ def run_prerequisites_script(
     )
     return "Prerequisites installed successfully."
 
-# Audio analyzer
 def run_audio_analyzer_script(
-    first_audio_input: str,
-    second_audio_input: str, 
-    index_input: str, 
-    save_plot_path_first_audio_image: str = "logs/first_audio.png",
-    save_plot_path_second_audio_image: str = "logs/second_audio.png",
-    save_plot_path_comparion_audio_image: str = "logs/comparison_audio.png"
+    audio_paths: list,
+    index_path: str, 
 ):
-    first_audio_info, first_plot_path = analyze_audio(first_audio_input, index_input, save_plot_path_first_audio_image)
-    second_audio_info, second_plot_path = analyze_audio(second_audio_input, index_input, save_plot_path_second_audio_image)
-    comparison_plot_path = generate_comparison_plot(first_audio_input, second_audio_input, index_input, save_plot_path_comparion_audio_image)
+    audio_infos = []
+    plot_paths = []
     
-    print(
-        f"First audio info of {first_audio_input}: {first_audio_info}",
-        f"First audio file {first_audio_input} analyzed successfully. Plot saved at: {first_plot_path}",
+    # Process up to 3 audio files (since we have 3 fixed outputs)
+    for idx, audio_path in enumerate(audio_paths[:3]):
+        audio_info, plot_path = analyze_audio(audio_path, index_path, f"logs/plot_{idx}.png")
+
+        audio_infos.append(audio_info)
+        plot_paths.append(plot_path)
+
+        print(
+            f"Audio info of {audio_path}: {audio_info}",
+            f"Audio file {audio_path} analyzed successfully. Plot saved at: {plot_path}",
+        )
+
+        comparison_plot_path = generate_comparison_plot(audio_paths, index_path)
+
+    
+    # Pad the lists if we have fewer than 3 files
+    while len(audio_infos) < 3:
+        audio_infos.append("")
+    while len(plot_paths) < 3:
+        plot_paths.append(None)
+    
+    print("audio_infos", len(audio_infos))
+    print("plot_paths", len(plot_paths))
+    
+    # Unpack the lists to return individual values
+    return (
+        audio_infos[0],  # First audio info
+        audio_infos[1],  # Second audio info
+        audio_infos[2],  # Third audio info
+        plot_paths[0],   # First plot
+        plot_paths[1],   # Second plot
+        plot_paths[2],   # Third plotíoooév =ú
+        comparison_plot_path
     )
-
-    print(
-        f"Second audio info of {second_audio_input}: {second_audio_info}",
-        f"Second audio file {second_audio_input} analyzed successfully. Plot saved at: {second_plot_path}",
-    )
-
-    return first_audio_info, second_audio_info, first_plot_path, second_plot_path, comparison_plot_path
-
 
 def run_model_author_script(model_author: str):
     with open(os.path.join(now_dir, "assets", "config.json"), "r") as f:
