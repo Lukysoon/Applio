@@ -6,9 +6,16 @@ rm *.bat
 # Function to create or activate a virtual environment
 prepare_install() {
     if [ -d ".venv" ]; then
-        echo "Venv found. This implies Applio has been already installed or this is a broken install. Try run Applio."
-        chmod +x run-applio.sh
-        ./run-applio.sh && exit 1
+        echo "Venv found. This implies Applio has been already installed or this is a broken install. Trying to run Applio."
+        printf "\033]0;Applio\007"
+        . .venv/bin/activate
+
+        export PYTORCH_ENABLE_MPS_FALLBACK=1
+        export PYTORCH_MPS_HIGH_WATERMARK_RATIO=0.0
+        
+        clear
+        python app.py --open && exit 1
+        
         if [ -f ".venv/bin/activate" ]; then
             . .venv/bin/activate  
         else
