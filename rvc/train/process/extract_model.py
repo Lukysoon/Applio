@@ -38,6 +38,8 @@ def extract_model(
     version="v2",
 ):
     try:
+        print("MODELLL")
+        print(model_path)
         model_dir = os.path.dirname(model_path)
         os.makedirs(model_dir, exist_ok=True)
 

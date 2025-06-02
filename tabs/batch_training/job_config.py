@@ -11,7 +11,7 @@ class BatchTrainingJob:
     
     # Unique identifier and metadata
     job_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    job_name: str = ""
+    job_name: str = "Training Job - "
     
     # Model Settings
     model_name: str = "my-project"
@@ -59,10 +59,17 @@ class BatchTrainingJob:
     # Job Status
     status: str = "pending"  # pending, preprocessing, extracting, training, indexing, completed, failed
     current_step: str = ""
-    progress: float = 0.0
     error_message: str = ""
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    
+    # Training Progress Tracking
+    current_epoch: int = 0
+    first_epoch_start_time: Optional[datetime] = None
+    first_epoch_end_time: Optional[datetime] = None
+    estimated_total_time: Optional[float] = None  # in seconds
+    time_per_epoch: Optional[float] = None  # in seconds
+    created_on: datetime = datetime.now()
     
     def __post_init__(self):
         """Set default job name if not provided"""
@@ -83,7 +90,7 @@ class BatchTrainingJob:
     def from_dict(cls, data: dict) -> 'BatchTrainingJob':
         """Create job from dictionary"""
         # Handle datetime fields
-        for field_name in ['start_time', 'end_time']:
+        for field_name in ['start_time', 'end_time', 'first_epoch_start_time', 'first_epoch_end_time']:
             if data.get(field_name):
                 data[field_name] = datetime.fromisoformat(data[field_name])
         
@@ -102,10 +109,6 @@ class BatchTrainingJob:
         }
         return status_map.get(self.status, self.status)
     
-    def get_progress_display(self) -> str:
-        """Get progress as percentage string"""
-        return f"{self.progress:.1f}%"
-    
     def get_duration_display(self) -> str:
         """Get job duration if completed"""
         if self.start_time and self.end_time:
@@ -114,3 +117,55 @@ class BatchTrainingJob:
             minutes, seconds = divmod(remainder, 60)
             return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
         return "N/A"
+    
+    def calculate_time_estimates(self) -> None:
+        """Calculate time estimates after first epoch completion"""
+        if self.first_epoch_start_time and self.first_epoch_end_time:
+            # Calculate time per epoch
+            epoch_duration = (self.first_epoch_end_time - self.first_epoch_start_time).total_seconds()
+            self.time_per_epoch = epoch_duration
+            
+            # Calculate estimated total time (remaining epochs * time per epoch)
+            remaining_epochs = self.total_epoch - self.current_epoch
+            self.estimated_total_time = remaining_epochs * epoch_duration
+    
+    def get_epoch_display(self) -> str:
+        """Get current epoch display"""
+        if self.status == "training" and self.current_epoch > 0:
+            return f"Epoch {self.current_epoch}/{self.total_epoch}"
+        return ""
+    
+    def get_time_estimate_display(self) -> str:
+        """Get estimated remaining time display"""
+        if self.estimated_total_time is not None and self.status == "training":
+            hours, remainder = divmod(self.estimated_total_time, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            return f"Est. remaining: {int(hours):02d}h {int(minutes):02d}m {int(seconds):02d}s"
+        return ""
+    
+    def get_time_per_epoch_display(self) -> str:
+        """Get time per epoch display"""
+        if self.time_per_epoch is not None:
+            minutes, seconds = divmod(self.time_per_epoch, 60)
+            return f"Time/epoch: {int(minutes):02d}m {int(seconds):02d}s"
+        return ""
+    
+    def get_detailed_progress_display(self) -> str:
+        """Get detailed progress display including epoch and time info"""
+        parts = []
+        
+        # Add epoch info if training
+        epoch_info = self.get_epoch_display()
+        if epoch_info:
+            parts.append(epoch_info)
+        
+        # Add time estimates if available
+        time_estimate = self.get_time_estimate_display()
+        if time_estimate:
+            parts.append(time_estimate)
+        
+        time_per_epoch = self.get_time_per_epoch_display()
+        if time_per_epoch:
+            parts.append(time_per_epoch)
+        
+        return " | ".join(parts)

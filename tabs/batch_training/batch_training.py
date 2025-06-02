@@ -3,6 +3,7 @@ import sys
 import gradio as gr
 from multiprocessing import cpu_count
 from typing import List, Tuple, Optional
+import copy
 
 # Add current directory to path
 now_dir = os.getcwd()
@@ -42,10 +43,10 @@ def create_job_from_form(*args) -> BatchTrainingJob:
         checkpointing, custom_pretrained, g_pretrained_path, d_pretrained_path,
         overtraining_detector, overtraining_threshold, index_algorithm
     ) = args
-    
+
     job = BatchTrainingJob(
-        job_name=job_name or f"Training Job - {model_name}",
-        model_name=model_name,
+        job_name= job_name.split("/")[-1],
+        model_name=model_name.split("/")[-1],
         architecture=architecture,
         sampling_rate=sampling_rate,
         vocoder=vocoder,
@@ -88,10 +89,6 @@ def add_job_to_queue(*args) -> Tuple[str, str]:
     try:
         job = create_job_from_form(*args)
         
-        # Validate required fields
-        if not job.dataset_name.strip():
-            return "❌ Error: Model name is required", get_job_queue_display()
-        
         if not job.dataset_path.strip():
             return "❌ Error: Dataset path is required", get_job_queue_display()
         
@@ -120,22 +117,6 @@ def remove_job_from_queue(job_index: int) -> Tuple[str, str]:
             return "❌ Invalid job index", get_job_queue_display()
     except Exception as e:
         return f"❌ Error removing job: {str(e)}", get_job_queue_display()
-
-
-def move_job_in_queue(job_index: int, direction: str) -> Tuple[str, str]:
-    """Move a job up or down in the queue"""
-    try:
-        if 0 <= job_index < len(batch_manager.jobs):
-            job = batch_manager.jobs[job_index]
-            if batch_manager.move_job(job.job_id, direction):
-                return f"✅ Moved job: {job.job_name} {direction}", get_job_queue_display()
-            else:
-                return f"❌ Cannot move job: {job.job_name}", get_job_queue_display()
-        else:
-            return "❌ Invalid job index", get_job_queue_display()
-    except Exception as e:
-        return f"❌ Error moving job: {str(e)}", get_job_queue_display()
-
 
 def clear_job_queue() -> Tuple[str, str]:
     """Clear all pending jobs from the queue"""
@@ -181,27 +162,29 @@ def get_job_queue_display() -> str:
     """Get formatted display of job queue"""
     if not batch_manager.jobs:
         return "No jobs in queue"
-    
+
     lines = []
     for i, job in enumerate(batch_manager.jobs):
         status_icon = {
-            "pending": "⏳",
-            "preprocessing": "🔄",
-            "extracting": "🔍",
-            "training": "🎯",
-            "indexing": "📊",
+            "pending": "⏸️",
+            "preprocessing": "⚙️", 
+            "extracting": "⛏️",
+            "training": "🏋️",
+            "indexing": "🗂️",
             "completed": "✅",
             "failed": "❌"
         }.get(job.status, "❓")
         
-        line = f"{i+1}. {status_icon} {job.job_name}"
-        line += f" | Model: {job.model_name}"
-        line += f" | Dataset: {os.path.basename(job.dataset_path) if job.dataset_path else 'N/A'}"
+        line = f"{status_icon} Model: {os.path.basename(job.model_name) if job.dataset_path else 'N/A' :<20}"
+        line += f" | Dataset: {job.dataset_path if job.dataset_path else 'N/A'}"
         line += f" | SR: {job.sampling_rate}Hz"
         line += f" | Epochs: {job.total_epoch}"
         
         if job.status not in ["pending", "completed", "failed"]:
-            line += f" | Progress: {job.get_progress_display()}"
+            # Use detailed progress display that includes epoch and time info
+            line += f" | Progress: {job.get_detailed_progress_display()}"
+        elif job.status == "completed":
+            line += f" | Duration: {job.get_duration_display()}"
         
         if job.status == "failed" and job.error_message:
             line += f" | Error: {job.error_message[:50]}..."
@@ -221,8 +204,8 @@ def get_batch_status_display() -> Tuple[str, str, str]:
     else:
         status = "⏹️ Stopped"
     
-    completed, total, percentage = batch_manager.get_overall_progress()
-    progress = f"Progress: {completed}/{total} jobs ({percentage:.1f}%)"
+    completed, total = batch_manager.get_overall_progress()
+    progress = f"Progress: {completed}/{total})"
     
     current_job = batch_manager.get_current_job_info()
     current = f"Current: {current_job}" if current_job else "Current: None"
@@ -285,15 +268,6 @@ def batch_training_tab():
             with gr.Row():
                 with gr.Column():
 
-                    model_name = gr.Dropdown(
-                        label="Experiment Name",
-                        choices=get_datasets_list(),
-                        value=None,
-                        interactive=True,
-                        allow_custom_value=False,
-                        visible=False
-                    )
-
                     architecture = gr.Radio(
                         label="Architecture",
                         choices=["RVC", "Applio"],
@@ -327,6 +301,7 @@ def batch_training_tab():
                         step=1,
                         label="CPU Cores",
                         interactive=False,
+                        visible=False
                     )
                 
                 with gr.Column():
@@ -335,187 +310,192 @@ def batch_training_tab():
                         placeholder="0 to ∞ separated by -",
                         value=str(get_number_of_gpus()),
                         interactive=False,
+                        visible=False
                     )
             
             # Dataset and Preprocessing
-            with gr.Accordion("Dataset & Preprocessing", open=False):
+            with gr.Row():
                 dataset_path = gr.Dropdown(
                     label="Dataset Path",
                     choices=get_datasets_list(),
                     allow_custom_value=False,
                     interactive=True,
                 )
-                
-                with gr.Row():
-                    cut_preprocess = gr.Radio(
-                        label="Audio cutting",
-                        choices=["Skip", "Simple", "Automatic"],
-                        value="Automatic",
-                        interactive=False,
-                        visible=False
-                        
-                    )
-                    process_effects = gr.Checkbox(
-                        label="Process effects",
-                        value=True,
-                        interactive=True,
-                        visible=False
-                    )
-                    noise_reduction = gr.Checkbox(
-                        label="Noise Reduction",
-                        value=False,
-                        interactive=True,
-                        visible=False
-                    )
-                
-                with gr.Row():
-                    clean_strength = gr.Slider(
-                        0, 1, 0.5, step=0.1,
-                        label="Noise Reduction Strength",
-                        interactive=True,
-                        visible=False
-                    )
-                    chunk_len = gr.Slider(
-                        0.5, 5.0, 3.0, step=0.1,
-                        label="Chunk length (sec)",
-                        interactive=False,
-                    )
-                    overlap_len = gr.Slider(
-                        0.0, 0.4, 0.3, step=0.1,
-                        label="Overlap length (sec)",
-                        interactive=False,
-                    )
+            
+            # with gr.Row():
+                cut_preprocess = gr.Radio(
+                    label="Audio cutting",
+                    choices=["Skip", "Simple", "Automatic"],
+                    value="Automatic",
+                    interactive=False,
+                    visible=False
+                    
+                )
+                process_effects = gr.Checkbox(
+                    label="Process effects",
+                    value=True,
+                    interactive=True,
+                    visible=False
+                )
+                noise_reduction = gr.Checkbox(
+                    label="Noise Reduction",
+                    value=False,
+                    interactive=True,
+                    visible=False
+                )
+            
+            with gr.Row():
+                clean_strength = gr.Slider(
+                    0, 1, 0.5, step=0.1,
+                    label="Noise Reduction Strength",
+                    interactive=True,
+                    visible=False
+                )
+                chunk_len = gr.Slider(
+                    0.5, 5.0, 3.0, step=0.1,
+                    label="Chunk length (sec)",
+                    interactive=False,
+                    visible=False
+                )
+                overlap_len = gr.Slider(
+                    0.0, 0.4, 0.3, step=0.1,
+                    label="Overlap length (sec)",
+                    interactive=False,
+                    visible=False
+                )
             
             # Extract Settings
-            with gr.Accordion("Extract Settings", open=False):
-                with gr.Row():
-                    f0_method = gr.Radio(
-                        label="Pitch extraction algorithm",
-                        choices=["crepe", "crepe-tiny", "rmvpe"],
-                        value="rmvpe",
-                        interactive=False,
-                    )
-                    embedder_model = gr.Radio(
-                        label="Embedder Model",
-                        choices=["contentvec", "custom"],
-                        value="contentvec",
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    include_mutes = gr.Slider(
-                        0, 10, 2, step=1,
-                        label="Silent training files",
-                        interactive=True,
-                    )
-                    hop_length = gr.Slider(
-                        1, 512, 128, step=1,
-                        label="Hop Length",
-                        visible=False,
-                        interactive=True,
-                    )
-                
+            with gr.Row():
+                f0_method = gr.Radio(
+                    label="Pitch extraction algorithm",
+                    choices=["crepe", "crepe-tiny", "rmvpe"],
+                    value="rmvpe",
+                    interactive=False,
+                    visible=False
+                )
+                embedder_model = gr.Radio(
+                    label="Embedder Model",
+                    choices=["contentvec", "custom"],
+                    value="contentvec",
+                    interactive=True,
+                )
+
                 embedder_model_custom = gr.Dropdown(
                     label="Custom Embedder",
                     choices=get_embedder_custom_list(),
                     interactive=True,
-                    allow_custom_value=True,
+                    visible=False,
+                )
+                
+            with gr.Row():
+                include_mutes = gr.Slider(
+                    0, 10, 2, step=1,
+                    label="Silent training files",
+                    interactive=True,
+                    visible=False
+                )
+                hop_length = gr.Slider(
+                    1, 512, 128, step=1,
+                    label="Hop Length",
                     visible=False,
                 )
             
+            
             # Training Settings
-            with gr.Accordion("Training Settings", open=False):
-                with gr.Row():
-                    batch_size = gr.Slider(
-                        1, 50, max_vram_gpu(0), step=1,
-                        label="Batch Size",
-                        interactive=True,
-                    )
-                    save_every_epoch = gr.Slider(
-                        1, 100, 10, step=1,
-                        label="Save Every Epoch",
-                        interactive=True,
-                    )
-                    total_epoch = gr.Slider(
-                        1, 10000, 500, step=1,
-                        label="Total Epoch",
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    save_only_latest = gr.Checkbox(
-                        label="Save Only Latest",
-                        value=True,
-                        interactive=True,
-                    )
-                    save_every_weights = gr.Checkbox(
-                        label="Save Every Weights",
-                        value=True,
-                        interactive=True,
-                    )
-                    pretrained = gr.Checkbox(
-                        label="Pretrained",
-                        value=True,
-                        interactive=True,
-                    )
-                
-                with gr.Row():
-                    cleanup = gr.Checkbox(
-                        label="Fresh Training",
-                        value=False,
-                        interactive=True,
-                    )
-                    cache_dataset_in_gpu = gr.Checkbox(
-                        label="Cache Dataset in GPU",
-                        value=False,
-                        interactive=True,
-                    )
-                    checkpointing = gr.Checkbox(
-                        label="Checkpointing",
-                        value=False,
-                        interactive=True,
-                    )
-                
-                # Advanced Training Settings
-                with gr.Row():
-                    custom_pretrained = gr.Checkbox(
-                        label="Custom Pretrained",
-                        value=False,
-                        interactive=True,
-                    )
-                    overtraining_detector = gr.Checkbox(
-                        label="Overtraining Detector",
-                        value=False,
-                        interactive=True,
-                    )
-                
-                with gr.Row(visible=False) as pretrained_custom_settings:
-                    g_pretrained_path = gr.Dropdown(
-                        label="Custom Pretrained G",
-                        choices=get_pretrained_list("G"),
-                        interactive=True,
-                        allow_custom_value=True,
-                    )
-                    d_pretrained_path = gr.Dropdown(
-                        label="Custom Pretrained D",
-                        choices=get_pretrained_list("D"),
-                        interactive=True,
-                        allow_custom_value=True,
-                    )
-                
-                with gr.Row(visible=False) as overtraining_settings:
-                    overtraining_threshold = gr.Slider(
-                        1, 100, 50, step=1,
-                        label="Overtraining Threshold",
-                        interactive=True,
-                    )
-                
-                index_algorithm = gr.Radio(
-                    label="Index Algorithm",
-                    choices=["Auto", "Faiss", "KMeans"],
-                    value="Auto",
+            with gr.Row():
+                batch_size = gr.Slider(
+                    1, 50, max_vram_gpu(0), step=1,
+                    label="Batch Size",
                     interactive=True,
                 )
+                save_every_epoch = gr.Slider(
+                    1, 100, 10, step=1,
+                    label="Save Every Epoch",
+                    interactive=True,
+                )
+                total_epoch = gr.Slider(
+                    1, 10000, 500, step=1,
+                    label="Total Epoch",
+                    interactive=True,
+                )
+                
+            with gr.Row():
+                save_only_latest = gr.Checkbox(
+                    label="Save Only Latest",
+                    value=True,
+                    interactive=True,
+                )
+                save_every_weights = gr.Checkbox(
+                    label="Save Every Weights",
+                    value=False,
+                    interactive=True,
+                )
+                pretrained = gr.Checkbox(
+                    label="Pretrained",
+                    value=True,
+                    interactive=True,
+                )
+            
+            with gr.Row():
+                cleanup = gr.Checkbox(
+                    label="Fresh Training",
+                    value=False,
+                    interactive=True,
+                )
+                cache_dataset_in_gpu = gr.Checkbox(
+                    label="Cache Dataset in GPU",
+                    value=False,
+                    interactive=True,
+                )
+                checkpointing = gr.Checkbox(
+                    label="Checkpointing",
+                    value=False,
+                    interactive=True,
+                )
+                
+            # Advanced Training Settings
+            with gr.Row():
+                custom_pretrained = gr.Checkbox(
+                    label="Custom Pretrained",
+                    value=False,
+                    interactive=True,
+                )
+                overtraining_detector = gr.Checkbox(
+                    label="Overtraining Detector",
+                    value=False,
+                    interactive=True,
+                    visible=False
+                )
+            
+            with gr.Row(visible=False) as pretrained_custom_settings:
+                g_pretrained_path = gr.Dropdown(
+                    label="Custom Pretrained G",
+                    choices=get_pretrained_list("G"),
+                    interactive=True,
+                    allow_custom_value=True,
+                )
+                d_pretrained_path = gr.Dropdown(
+                    label="Custom Pretrained D",
+                    choices=get_pretrained_list("D"),
+                    interactive=True,
+                    allow_custom_value=True,
+                )
+            
+            with gr.Row(visible=False) as overtraining_settings:
+                overtraining_threshold = gr.Slider(
+                    1, 100, 50, step=1,
+                    label="Overtraining Threshold",
+                    interactive=True,
+                    visible=False
+                )
+            
+            index_algorithm = gr.Radio(
+                label="Index Algorithm",
+                choices=["Auto", "Faiss", "KMeans"],
+                value="Auto",
+                interactive=True,
+                visible=False
+            )
             
             # Add Job Button
             with gr.Row():
@@ -545,8 +525,6 @@ def batch_training_tab():
                     interactive=True,
                 )
                 remove_job_btn = gr.Button("Remove Job")
-                move_up_btn = gr.Button("Move Up")
-                move_down_btn = gr.Button("Move Down")
                 clear_queue_btn = gr.Button("Clear Queue", variant="stop")
             
             queue_status = gr.Textbox(
@@ -555,22 +533,22 @@ def batch_training_tab():
                 max_lines=2,
             )
         
-        # Batch Configuration
-        with gr.Accordion("Batch Configuration", open=False):
-            with gr.Row():
-                config_filepath = gr.Textbox(
-                    label="Configuration File Path",
-                    placeholder="batch_config.json",
-                    interactive=True,
-                )
-                save_config_btn = gr.Button("Save Config")
-                load_config_btn = gr.Button("Load Config")
+        # # Batch Configuration
+        # with gr.Accordion("Batch Configuration", open=False):
+        #     with gr.Row():
+        #         config_filepath = gr.Textbox(
+        #             label="Configuration File Path",
+        #             placeholder="batch_config.json",
+        #             interactive=True,
+        #         )
+        #         save_config_btn = gr.Button("Save Config")
+        #         load_config_btn = gr.Button("Load Config")
             
-            config_status = gr.Textbox(
-                label="Configuration Status",
-                interactive=False,
-                max_lines=2,
-            )
+        #     config_status = gr.Textbox(
+        #         label="Configuration Status",
+        #         interactive=False,
+        #         max_lines=2,
+        #     )
         
         # Batch Execution
         with gr.Accordion("Batch Execution", open=True):
@@ -590,6 +568,7 @@ def batch_training_tab():
                     value=get_batch_status_display()[2],
                     interactive=False,
                 )
+                
             
             with gr.Row():
                 start_batch_btn = gr.Button("Start Batch", variant="primary")
@@ -600,6 +579,7 @@ def batch_training_tab():
                 label="Execution Status",
                 interactive=False,
                 max_lines=2,
+                visible=False
             )
             
             execution_log = gr.Textbox(
@@ -647,8 +627,9 @@ def batch_training_tab():
             outputs=[hop_length],
         )
 
-        job_name = model_name
-        
+        job_name = dataset_path
+        model_name =  dataset_path
+
         # Job management event handlers
         add_job_btn.click(
             fn=add_job_to_queue,
@@ -676,17 +657,6 @@ def batch_training_tab():
             outputs=[queue_status, job_queue_display],
         )
         
-        move_up_btn.click(
-            fn=lambda idx: move_job_in_queue(int(idx) - 1, "up"),
-            inputs=[job_index_input],
-            outputs=[queue_status, job_queue_display],
-        )
-        
-        move_down_btn.click(
-            fn=lambda idx: move_job_in_queue(int(idx) - 1, "down"),
-            inputs=[job_index_input],
-            outputs=[queue_status, job_queue_display],
-        )
         
         clear_queue_btn.click(
             fn=clear_job_queue,
@@ -695,17 +665,17 @@ def batch_training_tab():
         )
         
         # Configuration event handlers
-        save_config_btn.click(
-            fn=save_batch_configuration,
-            inputs=[config_filepath],
-            outputs=[config_status],
-        )
+        # save_config_btn.click(
+        #     fn=save_batch_configuration,
+        #     inputs=[config_filepath],
+        #     outputs=[config_status],
+        # )
         
-        load_config_btn.click(
-            fn=load_batch_configuration,
-            inputs=[config_filepath],
-            outputs=[config_status, job_queue_display],
-        )
+        # load_config_btn.click(
+        #     fn=load_batch_configuration,
+        #     inputs=[config_filepath],
+        #     outputs=[config_status, job_queue_display],
+        # )
         
         # Batch execution event handlers
         start_batch_btn.click(

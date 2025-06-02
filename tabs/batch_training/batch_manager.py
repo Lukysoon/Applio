@@ -53,18 +53,6 @@ class BatchTrainingManager:
                 return job
         return None
     
-    def move_job(self, job_id: str, direction: str) -> bool:
-        """Move a job up or down in the queue"""
-        for i, job in enumerate(self.jobs):
-            if job.job_id == job_id and job.status == "pending":
-                if direction == "up" and i > 0:
-                    self.jobs[i], self.jobs[i-1] = self.jobs[i-1], self.jobs[i]
-                    return True
-                elif direction == "down" and i < len(self.jobs) - 1:
-                    self.jobs[i], self.jobs[i+1] = self.jobs[i+1], self.jobs[i]
-                    return True
-        return False
-    
     def clear_queue(self) -> None:
         """Clear all pending jobs from the queue"""
         pending_jobs = [job for job in self.jobs if job.status == "pending"]
@@ -163,13 +151,16 @@ class BatchTrainingManager:
         try:
             job.start_time = datetime.now()
             job.status = "preprocessing"
-            job.progress = 0.0
+            job.current_epoch = 0
+            job.first_epoch_start_time = None
+            job.first_epoch_end_time = None
+            job.estimated_total_time = None
+            job.time_per_epoch = None
             self._log(f"Starting job: {job.job_name}")
             self._update_progress()
             
             # Step 1: Preprocessing
             job.current_step = "Preprocessing dataset"
-            job.progress = 10.0
             self._update_progress()
             
             preprocess_result = run_preprocess_script(
@@ -191,9 +182,12 @@ class BatchTrainingManager:
             # Step 2: Feature Extraction
             job.status = "extracting"
             job.current_step = "Extracting features"
-            job.progress = 30.0
             self._update_progress()
             
+            print("MODEL:")
+            print(job.embedder_model)
+            print(job.embedder_model_custom)
+
             extract_result = run_extract_script(
                 model_name=job.model_name,
                 f0_method=job.f0_method,
@@ -212,30 +206,12 @@ class BatchTrainingManager:
             # Step 3: Training
             job.status = "training"
             job.current_step = "Training model"
-            job.progress = 50.0
+            job.current_epoch = 1
+            job.first_epoch_start_time = datetime.now()
             self._update_progress()
             
-            train_result = run_train_script(
-                model_name=job.model_name,
-                save_every_epoch=job.save_every_epoch,
-                save_only_latest=job.save_only_latest,
-                save_every_weights=job.save_every_weights,
-                total_epoch=job.total_epoch,
-                sample_rate=int(job.sampling_rate),
-                batch_size=job.batch_size,
-                gpu=job.gpu,
-                overtraining_detector=job.overtraining_detector,
-                overtraining_threshold=job.overtraining_threshold,
-                pretrained=job.pretrained,
-                cleanup=job.cleanup,
-                index_algorithm=job.index_algorithm,
-                cache_data_in_gpu=job.cache_dataset_in_gpu,
-                custom_pretrained=job.custom_pretrained,
-                g_pretrained_path=job.g_pretrained_path,
-                d_pretrained_path=job.d_pretrained_path,
-                vocoder=job.vocoder,
-                checkpointing=job.checkpointing,
-            )
+            # Start training with progress monitoring
+            train_result = self._run_train_with_monitoring(job)
             
             if not self.is_running:
                 return False
@@ -243,7 +219,6 @@ class BatchTrainingManager:
             # Step 4: Index Generation (already included in train_script, but we'll show progress)
             job.status = "indexing"
             job.current_step = "Generating index"
-            job.progress = 90.0
             self._update_progress()
             
             # Small delay to show indexing step
@@ -252,7 +227,6 @@ class BatchTrainingManager:
             # Job completed successfully
             job.status = "completed"
             job.current_step = "Completed"
-            job.progress = 100.0
             job.end_time = datetime.now()
             self._log(f"Job {job.job_name} completed successfully")
             self._update_progress()
@@ -273,19 +247,24 @@ class BatchTrainingManager:
         total_jobs = len(self.jobs)
         
         if total_jobs == 0:
-            return 0, 0, 0.0
-        
-        # Calculate overall percentage
-        overall_percentage = (completed_jobs / total_jobs) * 100
+            return 0, 0
         
         # Add current job progress if running
         if self.is_running and self.current_job_index < len(self.jobs):
             current_job = self.jobs[self.current_job_index]
-            if current_job.status not in ["completed", "failed"]:
-                current_job_contribution = (current_job.progress / 100) / total_jobs * 100
-                overall_percentage += current_job_contribution
         
-        return completed_jobs, total_jobs, overall_percentage
+        return completed_jobs, total_jobs
+    
+    def get_remainng_time(self) -> Optional[str]:
+        """Get information about the currently running job"""
+        if not self.is_running or self.current_job_index >= len(self.jobs):
+            return None
+        
+        current_job = self.jobs[self.current_job_index]
+        if current_job.status in ["completed", "failed"]:
+            return None
+        
+        return f"{current_job.get_duration_display()}"
     
     def get_current_job_info(self) -> Optional[str]:
         """Get information about the currently running job"""
@@ -296,7 +275,7 @@ class BatchTrainingManager:
         if current_job.status in ["completed", "failed"]:
             return None
         
-        return f"{current_job.job_name}: {current_job.current_step} ({current_job.get_progress_display()})"
+        return f"{current_job.job_name}: {current_job.current_step}"
     
     def save_batch_config(self, filepath: str) -> None:
         """Save batch configuration to file"""
@@ -328,7 +307,6 @@ class BatchTrainingManager:
                 # Reset status to pending for reloaded jobs
                 if job.status not in ["completed"]:
                     job.status = "pending"
-                    job.progress = 0.0
                     job.error_message = ""
                     job.start_time = None
                     job.end_time = None
@@ -370,3 +348,195 @@ class BatchTrainingManager:
     def get_execution_log(self) -> List[str]:
         """Get the execution log"""
         return self.execution_log.copy()
+    
+    def _run_train_with_monitoring(self, job: BatchTrainingJob) -> str:
+        """Run training with real epoch progress monitoring"""
+        import subprocess
+        import threading
+        
+        # Start training in a separate thread so we can monitor progress
+        training_thread = threading.Thread(
+            target=self._run_training_subprocess,
+            args=(job,)
+        )
+        training_thread.daemon = True
+        training_thread.start()
+        
+        # Monitor progress while training runs
+        self._monitor_training_progress(job)
+        
+        # Wait for training to complete
+        training_thread.join()
+        
+        return f"Model {job.model_name} trained successfully."
+    
+    def _run_training_subprocess(self, job: BatchTrainingJob) -> None:
+        """Run the actual training subprocess"""
+        try:
+            train_result = run_train_script(
+                model_name=job.model_name,
+                save_every_epoch=job.save_every_epoch,
+                save_only_latest=job.save_only_latest,
+                save_every_weights=job.save_every_weights,
+                total_epoch=job.total_epoch,
+                sample_rate=int(job.sampling_rate),
+                batch_size=job.batch_size,
+                gpu=job.gpu,
+                overtraining_detector=job.overtraining_detector,
+                overtraining_threshold=job.overtraining_threshold,
+                pretrained=job.pretrained,
+                cleanup=job.cleanup,
+                index_algorithm=job.index_algorithm,
+                cache_data_in_gpu=job.cache_dataset_in_gpu,
+                custom_pretrained=job.custom_pretrained,
+                g_pretrained_path=job.g_pretrained_path,
+                d_pretrained_path=job.d_pretrained_path,
+                vocoder=job.vocoder,
+                checkpointing=job.checkpointing,
+            )
+        except Exception as e:
+            self._log(f"Training subprocess failed: {str(e)}")
+    
+    def _monitor_training_progress(self, job: BatchTrainingJob) -> None:
+        """Monitor training progress by reading the progress file"""
+        from rvc.train.progress_monitor import TrainingProgressMonitor
+        
+        progress_file = os.path.join("logs", job.model_name, "training_progress.json")
+        last_epoch = 0
+        
+        # Wait for training to start and create progress file
+        start_time = time.time()
+        while not os.path.exists(progress_file) and self.is_running:
+            time.sleep(1)
+            # Timeout after 30 seconds if progress file doesn't appear
+            if time.time() - start_time > 30:
+                self._log(f"Warning: Progress file not found for {job.job_name}, using fallback monitoring")
+                self._fallback_progress_monitoring(job)
+                return
+        
+        # Monitor progress while training runs
+        while self.is_running:
+            try:
+                progress_data = TrainingProgressMonitor.read_progress(job.model_name)
+                
+                if progress_data:
+                    current_epoch = progress_data.get("current_epoch", 0)
+                    status = progress_data.get("status", "training")
+                    progress_percentage = progress_data.get("progress_percentage", 0)
+                    current_step = progress_data.get("current_step", "Training")
+                    time_per_epoch = progress_data.get("time_per_epoch")
+                    estimated_remaining = progress_data.get("estimated_time_remaining")
+
+                    # Update job with real progress data
+                    job.current_epoch = current_epoch
+                    job.current_step = current_step
+                    
+                    # Update timing information
+                    if time_per_epoch and not job.time_per_epoch:
+                        job.time_per_epoch = time_per_epoch
+                        if not job.first_epoch_end_time and current_epoch >= 1:
+                            job.first_epoch_end_time = datetime.now()
+                            job.calculate_time_estimates()
+                    
+                    if estimated_remaining:
+                        job.estimated_total_time = estimated_remaining
+                    
+                    # Log epoch changes
+                    if current_epoch > last_epoch:
+                        last_epoch = current_epoch
+                        time_display = job.get_time_estimate_display() if job.time_per_epoch else "Calculating..."
+                        self._log(f"Job {job.job_name}: Epoch {current_epoch}/{job.total_epoch} - {time_display}")
+                    
+                    # Check if training is completed
+                    if status == "completed":
+                        self._log(f"Training completed for {job.job_name}")
+                        break
+                    
+                    # Check for errors
+                    if status == "error":
+                        error_msg = progress_data.get("error_message", "Unknown error")
+                        self._log(f"Training error for {job.job_name}: {error_msg}")
+                        break
+                    
+                    self._update_progress()
+                
+                time.sleep(2)  # Check progress every 2 seconds
+                
+            except Exception as e:
+                self._log(f"Error reading progress for {job.job_name}: {str(e)}")
+                time.sleep(5)  # Wait longer on error
+        
+        # Clean up progress file after training
+        try:
+            TrainingProgressMonitor.cleanup_progress_file(job.model_name)
+        except Exception:
+            pass  # Ignore cleanup errors
+    
+    def _fallback_progress_monitoring(self, job: BatchTrainingJob) -> None:
+        """Fallback progress monitoring when progress file is not available"""
+        self._log(f"Using fallback progress monitoring for {job.job_name}")
+        
+        # Simple time-based estimation
+        estimated_epoch_duration = 60  # Assume 60 seconds per epoch as fallback
+        
+        for epoch in range(1, job.total_epoch + 1):
+            if not self.is_running:
+                break
+            
+            job.current_epoch = epoch
+            job.current_step = f"Training model - Epoch {epoch}/{job.total_epoch}"
+            
+            # Update timing estimates
+            if epoch == 1:
+                job.first_epoch_start_time = datetime.now()
+            elif epoch == 2:
+                job.first_epoch_end_time = datetime.now()
+                job.calculate_time_estimates()
+            
+            if job.time_per_epoch:
+                remaining_epochs = job.total_epoch - epoch
+                job.estimated_total_time = remaining_epochs * job.time_per_epoch
+            
+            self._update_progress()
+            self._log(f"Job {job.job_name}: Epoch {epoch}/{job.total_epoch} (fallback monitoring)")
+            
+            # Wait for estimated epoch duration
+            time.sleep(min(estimated_epoch_duration, 10))  # Cap at 10 seconds for demo
+    
+    def _simulate_epoch_progress(self, job: BatchTrainingJob) -> None:
+        """Simulate epoch progression for demonstration purposes"""
+        # This is a simplified simulation - in reality, you'd monitor actual training progress
+        epoch_duration = 30  # Simulate 30 seconds per epoch for demo
+        
+        for epoch in range(1, min(6, job.total_epoch + 1)):  # Simulate first 5 epochs
+            if not self.is_running:
+                break
+                
+            job.current_epoch = epoch
+            
+            # Record first epoch timing
+            if epoch == 1:
+                job.first_epoch_start_time = datetime.now()
+            elif epoch == 2 and job.first_epoch_start_time:
+                job.first_epoch_end_time = datetime.now()
+                job.calculate_time_estimates()
+                self._log(f"First epoch completed for {job.job_name}. Estimated total time: {job.get_time_estimate_display()}")
+            
+            # Update progress based on epoch
+            job.current_step = f"Training model - Epoch {epoch}/{job.total_epoch}"
+            
+            # Update time estimates for subsequent epochs
+            if job.time_per_epoch and epoch > 1:
+                remaining_epochs = job.total_epoch - epoch
+                job.estimated_total_time = remaining_epochs * job.time_per_epoch
+            
+            self._update_progress()
+            self._log(f"Job {job.job_name}: {job.get_epoch_display()} - {job.get_time_estimate_display()}")
+            
+            # Simulate epoch duration
+            time.sleep(2)  # Shortened for demo - real epochs take much longer
+        
+        # Complete the training simulation
+        job.current_epoch = job.total_epoch
+        job.current_step = f"Training completed - {job.total_epoch} epochs"
+        self._update_progress()

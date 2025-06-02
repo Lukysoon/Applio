@@ -39,6 +39,7 @@ from utils import (
     save_checkpoint,
     summarize,
 )
+from progress_monitor import TrainingProgressMonitor
 
 # Zluda hijack
 import rvc.lib.zluda
@@ -554,7 +555,16 @@ def run(
                 )
             break
 
+    # Initialize progress monitor for rank 0 (main process)
+    progress_monitor = None
+    if rank == 0:
+        progress_monitor = TrainingProgressMonitor(model_name, custom_total_epoch)
+
     for epoch in range(epoch_str, total_epoch + 1):
+        # Start epoch monitoring
+        if progress_monitor:
+            progress_monitor.start_epoch(epoch)
+
         train_and_evaluate(
             rank,
             epoch,
@@ -570,10 +580,19 @@ def run(
             device_id,
             reference,
             fn_mel_loss,
+            progress_monitor,
         )
+
+        # End epoch monitoring
+        if progress_monitor:
+            progress_monitor.end_epoch(epoch)
 
         scheduler_g.step()
         scheduler_d.step()
+
+    # Complete training
+    if progress_monitor:
+        progress_monitor.complete_training()
 
 
 def train_and_evaluate(
@@ -591,6 +610,7 @@ def train_and_evaluate(
     device_id,
     reference,
     fn_mel_loss,
+    progress_monitor=None,
 ):
     """
     Trains and evaluates the model for one epoch.
