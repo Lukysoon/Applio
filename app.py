@@ -89,7 +89,7 @@ with gr.Blocks(
         batch_training_tab()
 
     # with gr.Tab(i18n("TTS")):
-        tts_tab()
+        # tts_tab()
 
     with gr.Tab(i18n("Voice Blender")):
         voice_blender_tab()
